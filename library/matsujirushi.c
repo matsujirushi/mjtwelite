@@ -3,6 +3,8 @@
 //
 // 2014/01/04 0.1 Takashi Matsuoka
 //                ・新規作成。
+// 2014/01/04 0.2 Takashi Matsuoka
+//                ・DO0,DO1のデジタル出力に対応。
 //
 
 #include <jendefs.h>				// JN516x
@@ -19,34 +21,34 @@ static int TweLiteDipPinToDioNumber(int pin)
 
 	static const int mapTweLiteDipPinToDioNumber[28] =
 	{
-		-1,	// 1
-		14,	// 2
-		7,	// 3
-		5,	// 4
-		18,	// 5
-		-1,	// 6
-		-1,	// 7
-		19,	// 8
-		4,	// 9
-		6,	// 10
-		8,	// 11
-		9,	// 12
-		10,	// 13
-		-1,	// 14
-		12,	// 15
-		13,	// 16
-		11,	// 17
-		16,	// 18
-		15,	// 19
-		17,	// 20
-		-1,	// 21
-		-1,	// 22
-		0,	// 23
-		-1,	// 24
-		1,	// 25
-		2,	// 26
-		3,	// 27
-		-1,	// 28
+		-1,		// 1
+		14,		// 2
+		7,		// 3
+		5,		// 4
+		18,		// 5
+		100,	// 6
+		101,	// 7
+		19,		// 8
+		4,		// 9
+		6,		// 10
+		8,		// 11
+		9,		// 12
+		10,		// 13
+		-1,		// 14
+		12,		// 15
+		13,		// 16
+		11,		// 17
+		16,		// 18
+		15,		// 19
+		17,		// 20
+		-1,		// 21
+		-1,		// 22
+		0,		// 23
+		-1,		// 24
+		1,		// 25
+		2,		// 26
+		3,		// 27
+		-1,		// 28
 	};
 
 	return mapTweLiteDipPinToDioNumber[pin - 1];
@@ -60,19 +62,30 @@ void pinMode(int pin, enum pinmode_t mode)
 		return;
 	}
 
-	switch (mode)
+	// DIO?
+	if (dioNumber < 100)
 	{
-	case INPUT:
-		vAHI_DioSetDirection(1 << dioNumber, 0);
-		vAHI_DioSetPullup(0, 1 << dioNumber);
-		break;
-	case OUTPUT:
-		vAHI_DioSetDirection(0, 1 << dioNumber);
-		break;
-	case INPUT_PULLUP:
-		vAHI_DioSetDirection(1 << dioNumber, 0);
-		vAHI_DioSetPullup(1 << dioNumber, 0);
-		break;
+		switch (mode)
+		{
+		case INPUT:
+			vAHI_DioSetDirection(1 << dioNumber, 0);
+			vAHI_DioSetPullup(0, 1 << dioNumber);
+			break;
+		case OUTPUT:
+			vAHI_DioSetDirection(0, 1 << dioNumber);
+			break;
+		case INPUT_PULLUP:
+			vAHI_DioSetDirection(1 << dioNumber, 0);
+			vAHI_DioSetPullup(1 << dioNumber, 0);
+			break;
+		}
+	}
+	else
+	{
+		dioNumber -= 100;
+
+		bAHI_DoEnableOutputs(TRUE);
+		vAHI_DoSetPullup(0, 1 << dioNumber);
 	}
 }
 
@@ -84,21 +97,39 @@ void digitalWrite(int pin, enum digital_t value)
 		return;
 	}
 
-	switch (value)
+	// DIO?
+	if (dioNumber < 100)
 	{
-	case LOW:
-		vAHI_DioSetOutput(0, 1 << dioNumber);
-		break;
-	case HIGH:
-		vAHI_DioSetOutput(1 << dioNumber, 0);
-		break;
+		switch (value)
+		{
+		case LOW:
+			vAHI_DioSetOutput(0, 1 << dioNumber);
+			break;
+		case HIGH:
+			vAHI_DioSetOutput(1 << dioNumber, 0);
+			break;
+		}
+	}
+	else
+	{
+		dioNumber -= 100;
+
+		switch (value)
+		{
+		case LOW:
+			vAHI_DoSetDataOut(0, 1 << dioNumber);
+			break;
+		case HIGH:
+			vAHI_DoSetDataOut(1 << dioNumber, 0);
+			break;
+		}
 	}
 }
 
 enum digital_t digitalRead(int pin)
 {
 	int dioNumber = TweLiteDipPinToDioNumber(pin);
-	if (dioNumber < 0)
+	if (dioNumber < 0 || 100 <= dioNumber)
 	{
 		return LOW;
 	}
