@@ -23,6 +23,18 @@
 #include "../../../library/uart.h"
 #include "../../../library/matsujirushi.h"
 
+#define DO_RED_LED			11
+#define DI_SW1_N			15
+#define DI_SW2_N			16
+#define AI_1				22
+#define AI_2				23
+#define AI_TEMPERATURE		25
+
+float MCP9700AnalogToTemperature(int value)
+{
+	return (float)(value * 247) / 1024 - 50;
+}
+
 typedef enum
 {
 	E_STATE_APP_BASE = ToCoNet_STATE_APP_BASE,
@@ -159,20 +171,24 @@ PRSEV_HANDLER_DEF(E_STATE_APP_STARTUP_COLD, tsEvent *pEv, teEvent eEvent, uint32
 	{
 		vfPrintf(&uart, "#E_STATE_APP_STARTUP_COLD"LB);
 
-		pinMode(11, OUTPUT);
-		pinMode(15, INPUT_PULLUP);
-		pinMode(16, INPUT_PULLUP);
+		pinMode(DO_RED_LED, OUTPUT);
+		pinMode(DI_SW1_N, INPUT_PULLUP);
+		pinMode(DI_SW2_N, INPUT_PULLUP);
 	}
 	else if (eEvent == E_EVENT_TICK_TIMER)
 	{
-		if (digitalRead(15) == LOW || digitalRead(16) == LOW)
+		if (digitalRead(DI_SW1_N) == LOW || digitalRead(DI_SW2_N) == LOW)
 		{
-			digitalWrite(11, HIGH);
+			digitalWrite(DO_RED_LED, HIGH);
 		}
 		else
 		{
-			digitalWrite(11, LOW);
+			digitalWrite(DO_RED_LED, LOW);
 		}
+	}
+	else if (eEvent == E_EVENT_TICK_SECOND)
+	{
+		vfPrintf(&uart, "%d"LB, (int)(MCP9700AnalogToTemperature(analogRead(AI_TEMPERATURE)) * 10));
 	}
 }
 
