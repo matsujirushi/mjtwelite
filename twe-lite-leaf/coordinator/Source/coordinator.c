@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
-// leaf.c
+// coordinator.c
 //
-// 2015/01/04 1.0 Takashi Matsuoka
+// 2015/01/07 1.0 Takashi Matsuoka
 //
 
 #include <jendefs.h>				// JN516x
@@ -21,46 +21,17 @@
 
 #include "../../../library/system.h"
 #include "../../../library/uart.h"
-#include "../../../library/matsujirushi.h"
-
-#define DO_RED_LED			11
-#define DI_SW1_N			15
-#define DI_SW2_N			16
-#define AI_1				22
-#define AI_2				23
-#define AI_TEMPERATURE		25
-
-float MCP9700AnalogToTemperature(int value)
-{
-	return (float)(value * 247) / 1024 - 50;
-}
 
 typedef enum
 {
 	E_STATE_APP_BASE = ToCoNet_STATE_APP_BASE,
 	E_STATE_APP_STARTUP_COLD,
-	E_STATE_APP_STARTUP_WARM,
 } teStateApp;
 
-typedef enum
-{
-	E_EVENT_APP_BASE = ToCoNet_EVENT_APP_BASE,
-	E_EVENT_APP_FINISH_TX_SUCCESS,
-	E_EVENT_APP_FINISH_TX_ERROR,
-} teEventApp;
-
 static tsFILE uart;
+static uint32 LedOn = 0;
 
 static void vProcessEvCore(tsEvent *pEv, teEvent eEvent, uint32 u32evarg);
-
-static void Reset()
-{
-	vfPrintf(&uart, "!Reset."LB);
-	uart0_flush();
-	delay_us(10e6);
-
-	vAHI_SwReset();
-}
 
 static void InitializeHardware(bool_t fWarmStart)
 {
@@ -73,6 +44,8 @@ static void InitializeHardware(bool_t fWarmStart)
 	// vfPrintf()用tsFILEを設定。
 	uart0_init(115200, 8, UART_PARITY_NONE, 1);
 	uart0_link_tsFILE(&uart);
+
+	vPortAsOutput(9);
 }
 
 ////////////////////////////////////////
@@ -90,6 +63,13 @@ void cbAppColdStart(bool_t bAfterAhiInit)
 
 		// ユーザ定義イベント処理関数を登録。
 		ToCoNet_Event_Register_State_Machine(vProcessEvCore);
+
+		// sToCoNet_AppContextを設定。
+		// -> ToCoNet_SDK_manual_201406.pdf P89.
+		sToCoNet_AppContext.u32AppId = APP_ID;		// アプリケーションID
+		sToCoNet_AppContext.u32ChMask = CH_MASK;	// 利用チャネル群
+		sToCoNet_AppContext.u8TxMacRetry = 0;		// MAC層の再送回数
+		sToCoNet_AppContext.bRxOnIdle = TRUE;		// 受信要否
 	}
 }
 
@@ -120,14 +100,6 @@ uint8 cbToCoNet_u8HwInt(uint32 u32DeviceId, uint32 u32ItemBitmap)
 //
 void cbToCoNet_vTxEvent(uint8 u8CbId, uint8 bStatus)
 {
-	if (!bStatus)
-	{
-		ToCoNet_Event_Process(E_EVENT_APP_FINISH_TX_ERROR, 0, vProcessEvCore);
-	}
-	else
-	{
-		ToCoNet_Event_Process(E_EVENT_APP_FINISH_TX_SUCCESS, 0, vProcessEvCore);
-	}
 }
 
 ////////////////////////////////////////
@@ -154,14 +126,9 @@ PRSEV_HANDLER_DEF(E_STATE_IDLE, tsEvent *pEv, teEvent eEvent, uint32 u32evarg)
 	}
 	else if (eEvent == E_EVENT_START_UP)
 	{
-		if (!(u32evarg & EVARG_START_UP_WAKEUP_RAMHOLD_MASK))
-		{
-			ToCoNet_Event_SetState(pEv, E_STATE_APP_STARTUP_COLD);
-		}
-		else
-		{
-			ToCoNet_Event_SetState(pEv, E_STATE_APP_STARTUP_WARM);
-		}
+		vfPrintf(&uart, "#E_EVENT_START_UP"LB);
+
+		ToCoNet_Event_SetState(pEv, E_STATE_APP_STARTUP_COLD);
 	}
 }
 
@@ -171,32 +138,33 @@ PRSEV_HANDLER_DEF(E_STATE_APP_STARTUP_COLD, tsEvent *pEv, teEvent eEvent, uint32
 	{
 		vfPrintf(&uart, "#E_STATE_APP_STARTUP_COLD"LB);
 
-		pinMode(DO_RED_LED, OUTPUT);
-		pinMode(DI_SW1_N, INPUT_PULLUP);
-		pinMode(DI_SW2_N, INPUT_PULLUP);
-	}
-	else if (eEvent == E_EVENT_TICK_TIMER)
-	{
-		if (digitalRead(DI_SW1_N) == LOW || digitalRead(DI_SW2_N) == LOW)
-		{
-			digitalWrite(DO_RED_LED, HIGH);
-		}
-		else
-		{
-			digitalWrite(DO_RED_LED, LOW);
-		}
-	}
-	else if (eEvent == E_EVENT_TICK_SECOND)
-	{
-		vfPrintf(&uart, "%d"LB, (int)(MCP9700AnalogToTemperature(analogRead(AI_TEMPERATURE)) * 10));
+		ToCoNet_vMacStart();
+
+		ToCoNet_Event_SetState(pEv, E_STATE_RUNNING);
 	}
 }
 
-PRSEV_HANDLER_DEF(E_STATE_APP_STARTUP_WARM, tsEvent *pEv, teEvent eEvent, uint32 u32evarg)
+PRSEV_HANDLER_DEF(E_STATE_RUNNING, tsEvent *pEv, teEvent eEvent, uint32 u32evarg)
 {
 	if (eEvent == E_EVENT_NEW_STATE)
 	{
-		vfPrintf(&uart, "#E_STATE_APP_STARTUP_WARM"LB);
+		vfPrintf(&uart, "#E_STATE_RUNNING"LB);
+	}
+	else if (eEvent == E_EVENT_TICK_SECOND)
+	{
+		vPutChar(&uart, '.');
+	}
+	else if (eEvent == E_EVENT_TICK_TIMER)
+	{
+		if (LedOn > 0)
+		{
+			vPortSetHi(9);
+			LedOn--;
+		}
+		else
+		{
+			vPortSetLo(9);
+		}
 	}
 }
 
@@ -204,7 +172,7 @@ static const tsToCoNet_Event_StateHandler asStateFuncTbl[] =
 {
 	PRSEV_HANDLER_TBL_DEF(E_STATE_IDLE),
 	PRSEV_HANDLER_TBL_DEF(E_STATE_APP_STARTUP_COLD),
-	PRSEV_HANDLER_TBL_DEF(E_STATE_APP_STARTUP_WARM),
+	PRSEV_HANDLER_TBL_DEF(E_STATE_RUNNING),
 };
 
 static void vProcessEvCore(tsEvent *pEv, teEvent eEvent, uint32 u32evarg)
@@ -224,6 +192,13 @@ void cbToCoNet_vHwEvent(uint32 u32DeviceId, uint32 u32ItemBitmap)
 //
 void cbToCoNet_vRxEvent(tsRxDataApp *pRx)
 {
+	vfPrintf(&uart, "%6u,", u32TickCount_ms / 1000);
+	vfPrintf(&uart, "%08x,", pRx->u32SrcAddr);
+	vfPrintf(&uart, "%3u,", pRx->u8Lqi);
+	vfPrintf(&uart, "%3u,", pRx->u8Seq);
+	vfPrintf(&uart, LB);
+
+	LedOn = 500 / 4;
 }
 
 ////////////////////////////////////////
